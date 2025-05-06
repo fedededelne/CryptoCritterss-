@@ -1,89 +1,119 @@
 from flask import Flask
-from threading import Thread
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import random
+import threading
 import os
 
-critters = [
-    {"name": "Byteclaw", "rarity": "Common", "image": "https://i.imgur.com/NruCL9u.png"},
-    {"name": "Cryphos", "rarity": "Rare", "image": "https://i.imgur.com/tHhL1wB.png"},
-    {"name": "Neurofang", "rarity": "Epic", "image": "https://i.imgur.com/h8Se5uW.png"},
-    {"name": "Shardscale", "rarity": "Legendary", "image": "https://i.imgur.com/ZwDoB1Y.png"},
-    {"name": "Hexhorn", "rarity": "Mythic", "image": "https://i.imgur.com/wskTGgD.png"}
-]
-
-users = {}
-app = Flask('')
+# === Flask setup for Render ===
+app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return """
-    <html>
-      <head>
-        <title>CryptoCritterss</title>
-        <style>
-          body { font-family: sans-serif; background: #0f0f0f; color: white; text-align: center; padding: 50px; }
-          h1 { color: #ffcc00; }
-          img { max-width: 200px; margin-top: 20px; }
-          a { color: #00ffff; }
-        </style>
-      </head>
-      <body>
-        <h1>Welcome to CryptoCritterss!</h1>
-        <p>Collect rare creatures, explore the world, and build your critter army on Telegram.</p>
-        <p><strong>Start now:</strong> <a href="https://t.me/CryptoCritterssBot">@CryptoCritterssBot</a></p>
-        <img src="https://i.imgur.com/NruCL9u.png" />
-        <p>More features and NFT integrations coming soon!</p>
-      </body>
-    </html>
-    """
+    return "CryptoCritters Bot is alive!"
 
-def run():
-    app.run(host='0.0.0.0', port=10000)
+# === Telegram Bot Setup ===
+TOKEN = os.environ.get("TELEGRAM_TOKEN")
+application = ApplicationBuilder().token(TOKEN).build()
 
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
+# === Game Data ===
+users = {}  # user_id -> {'creatures': [], 'level': 1, 'coins': 0}
+
+creatures = [
+    {"name": "Byteclaw", "rarity": "common"},
+    {"name": "Cryphos", "rarity": "common"},
+    {"name": "Glitcheel", "rarity": "rare"},
+    {"name": "Cryptoflare", "rarity": "rare"},
+    {"name": "Spectrabyte", "rarity": "legendary"},
+]
+
+rarity_weights = {
+    "common": 0.7,
+    "rare": 0.25,
+    "legendary": 0.05
+}
+
+rarity_rewards = {
+    "common": 10,
+    "rare": 25,
+    "legendary": 100
+}
+
+# === Game Logic ===
+
+def get_random_creature():
+    rarity = random.choices(
+        population=["common", "rare", "legendary"],
+        weights=[rarity_weights[r] for r in ["common", "rare", "legendary"]],
+        k=1
+    )[0]
+    options = [c for c in creatures if c["rarity"] == rarity]
+    return random.choice(options)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in users:
-        users[user_id] = random.choice(critters)
-    await update.message.reply_text("Welcome to CryptoCritterss! Use /mycritter to view your creature.")
+        users[user_id] = {"creatures": [], "level": 1, "coins": 0}
+    await update.message.reply_text("Welcome to CryptoCritters!\nUse /hunt to search for new creatures!")
 
-async def mycritter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def hunt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in users:
-        users[user_id] = random.choice(critters)
-    critter = users[user_id]
-    await update.message.reply_photo(critter["image"],
-        caption=f"Your Critter:\nName: {critter['name']}\nRarity: {critter['rarity']}")
+    user = users.setdefault(user_id, {"creatures": [], "level": 1, "coins": 0})
 
-async def explore(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    new_critter = random.choice(critters)
-    users[update.effective_user.id] = new_critter
-    await update.message.reply_photo(new_critter["image"],
-        caption=f"You found a new Critter!\nName: {new_critter['name']}\nRarity: {new_critter['rarity']}")
+    creature = get_random_creature()
+    user["creatures"].append(creature)
+    user["coins"] += rarity_rewards[creature["rarity"]]
 
-async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Welcome to the Shop!\n\n"
-        "Upgrade Options:\n"
-        "1. Level Boost - $0.99\n"
-        "2. Unlock Rare Critter - $2.99\n"
-        "3. Mythic Critter Pack - $5.99\n\n"
-        "Payments coming soon. Stay tuned!"
+        f"You found a {creature['rarity'].capitalize()} creature: {creature['name']}!\n"
+        f"You earned {rarity_rewards[creature['rarity']]} coins.\n"
+        f"Use /inventory to view your collection."
     )
 
-def main():
-    keep_alive()
-    application = ApplicationBuilder().token(os.environ["TELEGRAM_TOKEN"]).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("mycritter", mycritter))
-    application.add_handler(CommandHandler("explore", explore))
-    application.add_handler(CommandHandler("shop", shop))
+async def inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = users.get(update.effective_user.id)
+    if not user or not user["creatures"]:
+        await update.message.reply_text("You haven't found any creatures yet. Use /hunt!")
+        return
+
+    lines = ["Your CryptoCritters Collection:"]
+    counts = {}
+    for c in user["creatures"]:
+        counts[c["name"]] = counts.get(c["name"], 0) + 1
+
+    for name, qty in counts.items():
+        lines.append(f"• {name} x{qty}")
+    lines.append(f"Coins: {user['coins']}")
+
+    await update.message.reply_text("\n".join(lines))
+
+async def upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = users.get(update.effective_user.id)
+    if not user:
+        await update.message.reply_text("Start hunting first using /hunt!")
+        return
+
+    cost = user["level"] * 100
+    if user["coins"] >= cost:
+        user["coins"] -= cost
+        user["level"] += 1
+        rarity_weights["common"] -= 0.05
+        rarity_weights["rare"] += 0.03
+        rarity_weights["legendary"] += 0.02
+        await update.message.reply_text(f"Upgrade successful! You're now level {user['level']}.")
+    else:
+        await update.message.reply_text(f"You need {cost} coins to upgrade! You have {user['coins']}.")
+
+# === Command Handlers ===
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("hunt", hunt))
+application.add_handler(CommandHandler("inventory", inventory))
+application.add_handler(CommandHandler("upgrade", upgrade))
+
+# === Launch Telegram bot in thread ===
+def run_bot():
     application.run_polling()
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    threading.Thread(target=run_bot).start()
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
