@@ -30,5 +30,7 @@ def respond():
 def index():
     return "CryptoCritters Bot is running!"
 
+# Rende il bot compatibile con Render
 if __name__ == "__main__":
-    app.run(threaded=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
